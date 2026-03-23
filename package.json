@@ -1,0 +1,17 @@
+{
+  "name": "com.zagoradev.mvvm.localization",
+  "displayName": "MVVM Localization (zagora.dev)",
+  "version": "1.0.0",
+  "unity": "6000.0",
+  "description": "Localization extension for MVVM UI package.",
+  "keywords": [
+    "mvvm",
+    "localization",
+    "ui",
+    "zagora.dev"
+  ],
+  "dependencies": {
+    "com.zagoradev.unity.commons": "https://github.com/pzagora/Unity-Commons.git",
+    "com.zagoradev.mvvm": "https://github.com/pzagora/MVVM-UI.git"
+  }
+}

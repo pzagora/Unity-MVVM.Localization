@@ -1,0 +1,52 @@
+using Commons.Attributes;
+
+namespace MVVM.Localization
+{
+    public enum Language
+    {
+        [LocalizedKey("language.afrikaans")] Afrikaans,
+        [LocalizedKey("language.arabic")] Arabic,
+        [LocalizedKey("language.basque")] Basque,
+        [LocalizedKey("language.belarusian")] Belarusian,
+        [LocalizedKey("language.bulgarian")] Bulgarian,
+        [LocalizedKey("language.catalan")] Catalan,
+        [LocalizedKey("language.czech")] Czech,
+        [LocalizedKey("language.danish")] Danish,
+        [LocalizedKey("language.dutch")] Dutch,
+        [LocalizedKey("language.english")] English,
+        [LocalizedKey("language.estonian")] Estonian,
+        [LocalizedKey("language.faroese")] Faroese,
+        [LocalizedKey("language.finnish")] Finnish,
+        [LocalizedKey("language.french")] French,
+        [LocalizedKey("language.german")] German,
+        [LocalizedKey("language.greek")] Greek,
+        [LocalizedKey("language.hebrew")] Hebrew,
+        [LocalizedKey("language.hungarian")] Hungarian,
+        [LocalizedKey("language.icelandic")] Icelandic,
+        [LocalizedKey("language.indonesian")] Indonesian,
+        [LocalizedKey("language.italian")] Italian,
+        [LocalizedKey("language.japanese")] Japanese,
+        [LocalizedKey("language.korean")] Korean,
+        [LocalizedKey("language.latvian")] Latvian,
+        [LocalizedKey("language.lithuanian")] Lithuanian,
+        [LocalizedKey("language.norwegian")] Norwegian,
+        [LocalizedKey("language.polish")] Polish,
+        [LocalizedKey("language.portuguese")] Portuguese,
+        [LocalizedKey("language.romanian")] Romanian,
+        [LocalizedKey("language.russian")] Russian,
+        [LocalizedKey("language.serbo.croatian")] SerboCroatian,
+        [LocalizedKey("language.slovak")] Slovak,
+        [LocalizedKey("language.slovenian")] Slovenian,
+        [LocalizedKey("language.spanish")] Spanish,
+        [LocalizedKey("language.swedish")] Swedish,
+        [LocalizedKey("language.thai")] Thai,
+        [LocalizedKey("language.turkish")] Turkish,
+        [LocalizedKey("language.ukrainian")] Ukrainian,
+        [LocalizedKey("language.vietnamese")] Vietnamese,
+        [LocalizedKey("language.hindi")] Hindi,
+        
+        [LocalizedKey("language.chinese")] Chinese,
+        [LocalizedKey("language.chinese.simplified")] ChineseSimplified,
+        [LocalizedKey("language.chinese.traditional")] ChineseTraditional,
+    }
+}

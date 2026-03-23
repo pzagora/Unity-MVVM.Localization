@@ -1,0 +1,21 @@
+{
+    "name": "MVVM.Localization",
+    "rootNamespace": "MVVM.Localization",
+    "references": [
+        "GUID:6055be8ebefd69e48b49212b09b47b2f",
+        "GUID:dc47925d1a5fa2946bdd37746b2b5d48",
+        "GUID:5588a8d33ec956e4f96352fcdbef5ebf",
+        "GUID:5a53845392ef28147a6795b3b3ada979"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "UnityReporter.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
