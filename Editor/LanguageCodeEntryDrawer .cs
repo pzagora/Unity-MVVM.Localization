@@ -1,10 +1,11 @@
+#if UNITY_EDITOR
 using UnityEditor;
 using UnityEngine;
 
 namespace MVVM.Localization.Editor
 {
     [CustomPropertyDrawer(typeof(LanguageCodeEntry))]
-    public class LanguageCodeEntryDrawer : PropertyDrawer
+    internal class LanguageCodeEntryDrawer : PropertyDrawer
     {
         private const float SPACING = 6f;
         private const float LANGUAGE_WIDTH_PERCENT = 0.7f;
@@ -51,3 +52,4 @@ namespace MVVM.Localization.Editor
         }
     }
 }
+#endif

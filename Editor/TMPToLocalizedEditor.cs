@@ -4,10 +4,10 @@ using TMPro;
 using UnityEditor;
 using UnityEngine;
 
-namespace MVVM.Localization
+namespace MVVM.Localization.Editor
 {
     [CustomEditor(typeof(TextMeshProUGUI))]
-    public class TMPToLocalizedEditor : UnityEditor.Editor
+    internal class TMPToLocalizedEditor : UnityEditor.Editor
     {
         private UnityEditor.Editor _internalEditor;
 

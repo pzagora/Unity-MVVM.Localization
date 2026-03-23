@@ -8,7 +8,7 @@ using UnityEngine.UI;
 namespace MVVM.Localization.Editor
 {
     [CustomEditor(typeof(Text))]
-    public class TextToLocalizedTMPEditor : UnityEditor.Editor
+    internal class TextToLocalizedTMPEditor : UnityEditor.Editor
     {
         private UnityEditor.Editor _internalEditor;
 

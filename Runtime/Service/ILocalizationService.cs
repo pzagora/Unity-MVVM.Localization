@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Commons;
 
@@ -7,7 +7,10 @@ namespace MVVM.Localization
 {
     public interface ILocalizationService : ILocalizationService<Language>
     {
-        Task RegisterTranslations(IEnumerable<Translation> translations);
+        /// <summary>
+        /// Initialize service with translations from setup.
+        /// </summary>
+        Task Initialize(IProgress<float> progress = null, CancellationToken ct = default);
     }
     
     public interface ILocalizationService<TLanguage> : IService
@@ -17,11 +20,6 @@ namespace MVVM.Localization
         /// Get currently selected language.
         /// </summary>
         TLanguage CurrentLanguage { get; }
-        
-        /// <summary>
-        /// Register a Translation into the service.
-        /// </summary>
-        Task Register(IEnumerable<Translation> translation);
         
         /// <summary>
         /// Register a ILocalizedText into the service.
@@ -36,7 +34,7 @@ namespace MVVM.Localization
         /// <summary>
         /// Change current language.
         /// </summary>
-        Task ChangeLanguage(TLanguage language);
+        Task ChangeLanguage(TLanguage language, CancellationToken ct = default);
 
         /// <summary>
         /// Check if translation for given key exists in any language

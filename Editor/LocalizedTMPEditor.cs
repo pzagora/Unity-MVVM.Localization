@@ -5,7 +5,7 @@ using UnityEngine;
 namespace MVVM.Localization.Editor
 {
     [CustomEditor(typeof(LocalizedTMP))]
-    public class LocalizedTMPEditor : Commons.Editor.Texts.StyleLinkedTMPEditor
+    internal class LocalizedTMPEditor : Commons.Editor.Texts.StyleLinkedTMPEditor
     {
         public override void OnInspectorGUI()
         {

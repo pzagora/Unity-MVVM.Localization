@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Commons.Extensions;
 using Commons.Injection;
@@ -12,17 +14,9 @@ namespace MVVM.Localization
     public class LocalizationService : LocalizationService<Language>, ILocalizationService
     {
         public LocalizationService(LocalizationSetup setup)
-            : this(LocalizationMapperFactory.Create(setup))
+            : base(setup, LocalizationMapperFactory.Create(setup))
         {
         }
-
-        private LocalizationService(ILanguageMapper<Language> mapper)
-            : base(mapper)
-        {
-        }
-
-        public async Task RegisterTranslations(IEnumerable<Translation> translations)
-            => await Register(translations);
     }
 
     public class LocalizationService<TLanguage> : ILocalizationService<TLanguage>
@@ -30,6 +24,7 @@ namespace MVVM.Localization
     {
         public TLanguage CurrentLanguage { get; private set; }
 
+        private readonly LocalizationSetup _setup;
         private readonly ILanguageMapper<TLanguage> _mapper;
         private readonly LanguagePersistence<TLanguage> _languagePersistence;
         private readonly HashSet<ILocalizedTMP> _registeredTexts = new();
@@ -37,18 +32,77 @@ namespace MVVM.Localization
 
         private const int TEXT_UPDATE_BATCH_SIZE = 20;
 
+        private const float PROGRESS_START = 0f;
+        private const float PROGRESS_LOAD_WEIGHT = 0.5f;
+        private const float PROGRESS_MAP_WEIGHT = 0.4f;
+        private const float PROGRESS_BATCH_UPDATE_START = 0.95f;
+        private const float PROGRESS_COMPLETE = 1f;
+        private const float PROGRESS_EMPTY_COMPLETE = 1f;
+
         private const string LOG_REGISTERED_TRANSLATIONS = "Registered {0} translation keys";
         private const string LOG_LANGUAGE_CHANGED = "Language changed: {0} -> {1}";
         private const string LOG_MISSING_TRANSLATION = "Missing translation in {0}: {1}";
         private const string LOG_UNKNOWN_LANGUAGE = "Unknown language code: {0} ({1} entries){2}";
         private const string LOG_TEXTS_UPDATED = "Text components updated: {0} | Batch amount: {1})";
 
-        protected LocalizationService(ILanguageMapper<TLanguage> mapper)
+        protected LocalizationService(LocalizationSetup setup, ILanguageMapper<TLanguage> mapper)
         {
+            _setup = setup ?? throw new ArgumentNullException(nameof(setup));
             _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
             _languagePersistence = new LanguagePersistence<TLanguage>(_mapper);
 
             CurrentLanguage = _languagePersistence.LoadOrDetect();
+        }
+
+        public async Task Initialize(IProgress<float> progress = null, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            _translations.Clear();
+            progress?.Report(PROGRESS_START);
+
+            var loadProgress = new Progress<float>(value =>
+            {
+                progress?.Report(value * PROGRESS_LOAD_WEIGHT);
+            });
+
+            var loadedTranslations = await LocalizationTableLoader.LoadTranslations(_setup, loadProgress, ct);
+            ct.ThrowIfCancellationRequested();
+
+            var unknownLanguages = new Dictionary<string, UnknownLanguageInfo>();
+            var translationCount = loadedTranslations.Count;
+
+            if (translationCount == NumericExtensions.Zero)
+            {
+                Report.Event<LocalizationService>(string.Format(LOG_REGISTERED_TRANSLATIONS, NumericExtensions.Zero));
+                LogUnknownLanguages(unknownLanguages);
+
+                progress?.Report(PROGRESS_EMPTY_COMPLETE);
+                return;
+            }
+
+            for (var i = NumericExtensions.Zero; i < translationCount; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var translation = loadedTranslations[i];
+                _translations[translation.Id] = BuildTranslationMap(translation, unknownLanguages);
+
+                var itemProgress = (i + 1f) / translationCount;
+                progress?.Report(PROGRESS_LOAD_WEIGHT + itemProgress * PROGRESS_MAP_WEIGHT);
+
+                await Task.Yield();
+            }
+
+            Report.Event<LocalizationService>(string.Format(LOG_REGISTERED_TRANSLATIONS, _translations.Keys.Count));
+            LogUnknownLanguages(unknownLanguages);
+
+            ct.ThrowIfCancellationRequested();
+
+            progress?.Report(PROGRESS_BATCH_UPDATE_START);
+            await BatchUpdate(ct);
+
+            progress?.Report(PROGRESS_COMPLETE);
         }
 
         public void Register(ILocalizedTMP component)
@@ -57,26 +111,10 @@ namespace MVVM.Localization
         public void Unregister(ILocalizedTMP component)
             => _registeredTexts.Remove(component);
 
-        public async Task Register(IEnumerable<Translation> translations)
+        public async Task ChangeLanguage(TLanguage language, CancellationToken ct = default)
         {
-            _translations.Clear();
+            ct.ThrowIfCancellationRequested();
 
-            var unknownLanguages = new Dictionary<string, UnknownLanguageInfo>();
-
-            foreach (var translation in translations)
-            {
-                _translations[translation.Id] = BuildTranslationMap(translation, unknownLanguages);
-                await Task.Yield();
-            }
-            
-            Report.Event<LocalizationService>(string.Format(LOG_REGISTERED_TRANSLATIONS, _translations.Keys.Count));
-            LogUnknownLanguages(unknownLanguages);
-
-            await BatchUpdate();
-        }
-
-        public async Task ChangeLanguage(TLanguage language)
-        {
             if (Equals(CurrentLanguage, language))
                 return;
 
@@ -85,7 +123,7 @@ namespace MVVM.Localization
             CurrentLanguage = language;
             _languagePersistence.Save(CurrentLanguage);
 
-            await BatchUpdate();
+            await BatchUpdate(ct);
         }
 
         public bool HasLocalized(string key)
@@ -111,8 +149,10 @@ namespace MVVM.Localization
 
             return key;
         }
-        
-        private Dictionary<TLanguage, string> BuildTranslationMap(Translation translation, Dictionary<string, UnknownLanguageInfo> unknownLanguages)
+
+        private Dictionary<TLanguage, string> BuildTranslationMap(
+            Translation translation,
+            Dictionary<string, UnknownLanguageInfo> unknownLanguages)
         {
             var map = new Dictionary<TLanguage, string>();
 
@@ -150,19 +190,18 @@ namespace MVVM.Localization
             foreach (var pair in unknownLanguages)
             {
                 var keys = BuildUnknownLanguageKeysLog(pair.Value.TranslationKeys);
-
                 Report.Warning<LocalizationService>(string.Format(LOG_UNKNOWN_LANGUAGE, pair.Key, pair.Value.Count, keys));
             }
         }
 
         private static string BuildUnknownLanguageKeysLog(HashSet<string> translationKeys)
         {
-            if (translationKeys.Count == 0)
+            if (translationKeys.Count == NumericExtensions.Zero)
                 return string.Empty;
 
             var builder = new StringBuilder();
             builder.AppendLine();
-            
+
             foreach (var key in translationKeys)
             {
                 builder.Append("- ");
@@ -172,27 +211,35 @@ namespace MVVM.Localization
             return builder.ToString();
         }
 
-        private async Task BatchUpdate()
+        private async Task BatchUpdate(CancellationToken ct = default)
         {
-            if (_registeredTexts.Count == NumericExtensions.Zero)
+            ct.ThrowIfCancellationRequested();
+
+            if (_registeredTexts.Count == 0)
                 return;
 
-            var count = NumericExtensions.Zero;
-            var batchCount = NumericExtensions.One;
+            var snapshot = _registeredTexts.ToArray();
+            var count = 0;
+            var batchCount = 1;
 
-            foreach (var text in _registeredTexts)
+            foreach (var text in snapshot)
             {
+                ct.ThrowIfCancellationRequested();
+
+                if (text == null)
+                    continue;
+
                 text.UpdateText();
                 count++;
 
-                if (count % TEXT_UPDATE_BATCH_SIZE != NumericExtensions.Zero || count >= _registeredTexts.Count) 
-                    continue;
-                
-                await Task.Yield();
-                batchCount++;
+                if (count % TEXT_UPDATE_BATCH_SIZE == 0 && count < snapshot.Length)
+                {
+                    await Task.Yield();
+                    batchCount++;
+                }
             }
 
-            Report.Warning<LocalizationService>(string.Format(LOG_TEXTS_UPDATED, count, batchCount));
+            Report.Event<LocalizationService>(string.Format(LOG_TEXTS_UPDATED, count, batchCount));
         }
     }
 }
