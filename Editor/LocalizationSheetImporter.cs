@@ -16,35 +16,76 @@ namespace MVVM.Localization.Editor
 {
     internal static class LocalizationSheetImporter
     {
-        private static readonly HttpClient HttpClient = new();
+        private static readonly HttpClient HttpClient = new()
+        {
+            Timeout = TimeSpan.FromSeconds(20)
+        };
 
-        public static void Sync(LocalizationSetup setup)
+        public static void Sync(LocalizationSetup setup, bool forceRebuild)
         {
             if (setup == null)
                 throw new ArgumentNullException(nameof(setup));
 
-            if (string.IsNullOrWhiteSpace(setup.ManifestUrl))
-                throw new InvalidOperationException("LocalizationSetup.ManifestUrl is empty.");
+            var sources = setup.GetEffectiveImportSources();
+            if (sources.Count == 0)
+                throw new InvalidOperationException("No enabled localization import sources are configured.");
 
-            var manifest = DownloadManifest(setup.ManifestUrl);
-            ValidateManifest(manifest);
+            var sourceResults = new List<SourceManifestResult>(sources.Count);
+            foreach (var source in sources)
+            {
+                var manifest = DownloadManifest(source.manifestUrl);
+                sourceResults.Add(new SourceManifestResult(source, manifest));
+            }
 
-            var assets = UpsertAssets(setup, manifest);
-            DeleteMissingAssets(setup, assets);
-            RefreshCatalog(setup, assets);
+            var report = LocalizationManifestValidator.Validate(setup, sourceResults);
+            if (report.HasErrors || report.HasWarnings)
+                report.LogToUnityConsole();
+            report.ThrowIfErrors();
+
+            var orderedResults = sourceResults
+                .OrderByDescending(x => x.Source.priority)
+                .ThenBy(x => LocalizationKeyUtility.NormalizeSourceId(x.Source.sourceId), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var assetRecords = new List<ImportedAssetRecord>();
+            var isMultiSource = orderedResults.Count > 1;
+
+            if (forceRebuild)
+            {
+                RebuildTranslationTrees(setup, orderedResults, isMultiSource);
+                AssetDatabase.Refresh();
+            }
+
+            foreach (var result in orderedResults)
+            {
+                var importedAssets = UpsertAssets(setup, result.Source, result.Manifest, isMultiSource);
+                assetRecords.AddRange(importedAssets);
+            }
+
+            RefreshCatalog(setup, assetRecords);
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
 
-            Debug.Log($"Localization sync complete. Spreadsheet: {manifest.spreadsheetId}, tabs: {manifest.tabs.Count}, assets: {assets.Count}.");
+            var summary = $"Localization sync complete. Sources: {orderedResults.Count}, tables: {assetRecords.Count}.";
+            if (report.HasWarnings)
+                Debug.LogWarning(summary + " Completed with validation warnings. See console for details.");
+            else
+                Debug.Log(summary);
         }
 
         private static GoogleSheetManifest DownloadManifest(string manifestUrl)
         {
-            var json = HttpClient.GetStringAsync(manifestUrl).GetAwaiter().GetResult();
+            if (string.IsNullOrWhiteSpace(manifestUrl))
+                throw new InvalidOperationException("Manifest URL is empty.");
+
+            using var response = HttpClient.GetAsync(manifestUrl).GetAwaiter().GetResult();
+            response.EnsureSuccessStatusCode();
+
+            var json = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
             var manifest = JsonUtility.FromJson<GoogleSheetManifest>(json);
             if (manifest == null)
-                throw new InvalidOperationException("Manifest endpoint returned invalid JSON.");
+                throw new InvalidOperationException($"Manifest endpoint returned invalid JSON: {manifestUrl}");
 
             manifest.tabs ??= new List<GoogleSheetManifestTab>();
             foreach (var tab in manifest.tabs)
@@ -58,34 +99,26 @@ namespace MVVM.Localization.Editor
             return manifest;
         }
 
-        private static void ValidateManifest(GoogleSheetManifest manifest)
+        private static List<ImportedAssetRecord> UpsertAssets(
+            LocalizationSetup setup,
+            LocalizationImportSource source,
+            GoogleSheetManifest manifest,
+            bool isMultiSource)
         {
-            if (manifest.tabs == null || manifest.tabs.Count == 0)
-                throw new InvalidOperationException("Manifest does not contain any tabs.");
-
-            var duplicateTitles = manifest.tabs
-                .Where(x => !string.IsNullOrWhiteSpace(x.title))
-                .GroupBy(x => x.title.Trim(), StringComparer.OrdinalIgnoreCase)
-                .Where(x => x.Count() > 1)
-                .Select(x => x.Key)
-                .ToList();
-
-            if (duplicateTitles.Count > 0)
-                throw new InvalidOperationException($"Manifest contains duplicate tab titles: {string.Join(", ", duplicateTitles)}");
-        }
-
-        private static List<LocalizationTableAsset> UpsertAssets(LocalizationSetup setup, GoogleSheetManifest manifest)
-        {
-            Directory.CreateDirectory(setup.TargetRootFolder);
-            var assets = new List<LocalizationTableAsset>();
+            var rootFolder = ResolveTargetRootFolder(setup, source, isMultiSource);
+            EnsureAssetFolderExists(rootFolder);
+            var imported = new List<ImportedAssetRecord>();
 
             foreach (var tab in manifest.tabs)
             {
                 if (string.IsNullOrWhiteSpace(tab.title))
                     continue;
 
-                var assetPath = BuildAssetPath(setup.TargetRootFolder, tab.title);
-                Directory.CreateDirectory(Path.GetDirectoryName(assetPath)!);
+                var tableId = GetTableId(tab);
+                var assetPath = BuildAssetPath(rootFolder, tableId);
+                var directory = Path.GetDirectoryName(assetPath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                    EnsureAssetFolderExists(directory);
 
                 var asset = AssetDatabase.LoadAssetAtPath<LocalizationTableAsset>(assetPath);
                 if (asset == null)
@@ -94,47 +127,74 @@ namespace MVVM.Localization.Editor
                     AssetDatabase.CreateAsset(asset, assetPath);
                 }
 
-                asset.EditorSetMetadata(manifest.spreadsheetId, tab.title, tab.gid, tab.checksum);
-                asset.EditorSetEntries(BuildEntries(tab));
+                asset.EditorSetMetadata(tab.checksum, source.sourceId, tableId, tab.title);
+                asset.EditorSetEntries(BuildEntries(source, tab));
                 EditorUtility.SetDirty(asset);
-                assets.Add(asset);
 
 #if MVVM_LOCALIZATION_ADDRESSABLES
-                EnsureAddressable(setup.AddressablesGroupName, assetPath, BuildAddressKey(tab.title));
+                if (source.convertToAddressables)
+                    EnsureAddressable(setup.AddressablesGroupName, assetPath, BuildAddressKey(source, tableId));
 #endif
+
+                imported.Add(new ImportedAssetRecord(source, asset));
             }
 
-            return assets;
+            return imported;
         }
 
-        private static void DeleteMissingAssets(LocalizationSetup setup, IReadOnlyCollection<LocalizationTableAsset> syncedAssets)
+        private static void RebuildTranslationTrees(
+            LocalizationSetup setup,
+            IEnumerable<SourceManifestResult> results,
+            bool isMultiSource)
         {
-            var expected = new HashSet<string>(syncedAssets.Select(AssetDatabase.GetAssetPath), StringComparer.OrdinalIgnoreCase);
-            var guids = AssetDatabase.FindAssets("t:LocalizationTableAsset", new[] { setup.TargetRootFolder });
+            var deletedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var guid in guids)
+            foreach (var result in results)
             {
-                var path = AssetDatabase.GUIDToAssetPath(guid);
-                if (expected.Contains(path))
+                var rootFolder = ResolveTargetRootFolder(setup, result.Source, isMultiSource);
+                if (string.IsNullOrWhiteSpace(rootFolder))
                     continue;
 
-                AssetDatabase.DeleteAsset(path);
+                rootFolder = rootFolder.Replace('\\', '/');
+                if (!deletedRoots.Add(rootFolder))
+                    continue;
+
+                if (!AssetDatabase.IsValidFolder(rootFolder))
+                    continue;
+
+                AssetDatabase.DeleteAsset(rootFolder);
             }
         }
 
-        private static void RefreshCatalog(LocalizationSetup setup, List<LocalizationTableAsset> assets)
+        private static void RefreshCatalog(LocalizationSetup setup, List<ImportedAssetRecord> records)
         {
             var catalog = AssetDatabase.LoadAssetAtPath<LocalizationCatalogAsset>(setup.CatalogAssetPath);
             if (catalog == null)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(setup.CatalogAssetPath)!);
+                var directory = Path.GetDirectoryName(setup.CatalogAssetPath);
+                if (!string.IsNullOrWhiteSpace(directory)) 
+                    EnsureAssetFolderExists(directory);
+
                 catalog = ScriptableObject.CreateInstance<LocalizationCatalogAsset>();
                 AssetDatabase.CreateAsset(catalog, setup.CatalogAssetPath);
             }
 
-            catalog.EditorSetLocalTables(assets.OrderBy(x => x.SheetName).ToList());
+            var orderedAssets = records
+                .OrderByDescending(x => x.Source.priority)
+                .ThenBy(x => LocalizationKeyUtility.NormalizeSourceId(x.Source.sourceId), StringComparer.OrdinalIgnoreCase)
+                .ThenBy(x => x.Asset.TableId, StringComparer.OrdinalIgnoreCase)
+                .Select(x => x.Asset)
+                .ToList();
+
+            catalog.EditorSetLocalTables(orderedAssets);
 #if MVVM_LOCALIZATION_ADDRESSABLES
-            catalog.EditorSetAddressableKeys(assets.Select(x => BuildAddressKey(x.SheetName)).OrderBy(x => x).ToList());
+            catalog.EditorSetAddressableKeys(records
+                .Where(x => x.Source.convertToAddressables)
+                .OrderByDescending(x => x.Source.priority)
+                .ThenBy(x => LocalizationKeyUtility.NormalizeSourceId(x.Source.sourceId), StringComparer.OrdinalIgnoreCase)
+                .ThenBy(x => x.Asset.TableId, StringComparer.OrdinalIgnoreCase)
+                .Select(x => BuildAddressKey(x.Source, x.Asset.TableId))
+                .ToList());
 #endif
             EditorUtility.SetDirty(catalog);
 
@@ -144,22 +204,23 @@ namespace MVVM.Localization.Editor
             EditorUtility.SetDirty(setup);
         }
 
-        private static List<LocalizationTableEntry> BuildEntries(GoogleSheetManifestTab tab)
+        private static List<LocalizationTableEntry> BuildEntries(LocalizationImportSource source, GoogleSheetManifestTab tab)
         {
             var entries = new List<LocalizationTableEntry>();
             if (tab.headers == null || tab.headers.Count < 2)
                 return entries;
 
-            var languages = tab.headers.Skip(1).Select(x => (x ?? string.Empty).Trim()).ToList();
+            var tableId = GetTableId(tab);
+            var languages = tab.headers.Skip(1).Select(LocalizationKeyUtility.NormalizeLanguageCode).ToList();
             foreach (var row in tab.rows)
             {
-                var rawKey = (row?.key ?? string.Empty).Trim().ToLowerInvariant();
+                var rawKey = LocalizationKeyUtility.NormalizeKey(row?.key);
                 if (string.IsNullOrWhiteSpace(rawKey))
                     continue;
 
                 var entry = new LocalizationTableEntry
                 {
-                    id = $"{tab.title.ToLowerInvariant()}.{rawKey}"
+                    id = LocalizationKeyUtility.BuildTranslationId(source.sourceId, tableId, rawKey, source.prefixSourceIdToKeys)
                 };
 
                 for (var i = 0; i < languages.Count; i++)
@@ -177,19 +238,63 @@ namespace MVVM.Localization.Editor
             return entries;
         }
 
-        private static string BuildAssetPath(string root, string sheetName)
+        private static string ResolveTargetRootFolder(LocalizationSetup setup, LocalizationImportSource source, bool isMultiSource)
         {
-            var segments = sheetName.Split('.').Select(SanitizeSegment).ToArray();
+            if (!string.IsNullOrWhiteSpace(source.targetRootFolder))
+                return source.targetRootFolder.Replace('\\', '/');
+
+            var baseRoot = string.IsNullOrWhiteSpace(setup.TargetRootFolder)
+                ? "Assets/Localization/Imported"
+                : setup.TargetRootFolder.Replace('\\', '/');
+
+            if (!isMultiSource)
+                return baseRoot;
+
+            return $"{baseRoot}/{LocalizationKeyUtility.SanitizeAssetPathSegment(LocalizationKeyUtility.NormalizeSourceId(source.sourceId))}";
+        }
+
+        private static string BuildAssetPath(string root, string tableId)
+        {
+            var segments = LocalizationKeyUtility.NormalizeTableId(tableId)
+                .Split(new[] { '.' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(LocalizationKeyUtility.SanitizeAssetPathSegment)
+                .ToArray();
+
+            if (segments.Length == 0)
+                segments = new[] { "table" };
+
             var folder = segments.Length == 1 ? root : Path.Combine(new[] { root }.Concat(segments.Take(segments.Length - 1)).ToArray());
             var assetName = segments[^1] + ".asset";
             return Path.Combine(folder, assetName).Replace('\\', '/');
         }
 
-        private static string BuildAddressKey(string sheetName)
-            => $"localization/{sheetName.Trim().ToLowerInvariant()}";
+        private static string BuildAddressKey(LocalizationImportSource source, string tableId)
+            => $"localization/{LocalizationKeyUtility.NormalizeSourceId(source.sourceId)}/{LocalizationKeyUtility.NormalizeTableId(tableId)}";
 
-        private static string SanitizeSegment(string value)
-            => string.Concat((value ?? string.Empty).Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        private static string GetTableId(GoogleSheetManifestTab tab)
+            => LocalizationKeyUtility.NormalizeTableId(string.IsNullOrWhiteSpace(tab.tableId) ? tab.title : tab.tableId);
+        
+        private static void EnsureAssetFolderExists(string assetFolderPath)
+        {
+            if (string.IsNullOrWhiteSpace(assetFolderPath) || AssetDatabase.IsValidFolder(assetFolderPath))
+                return;
+
+            var normalized = assetFolderPath.Replace('\\', '/');
+            var parts = normalized.Split('/');
+
+            if (parts.Length == 0 || parts[0] != "Assets")
+                throw new InvalidOperationException($"Asset folder must be under Assets: {assetFolderPath}");
+
+            var current = "Assets";
+            for (var i = 1; i < parts.Length; i++)
+            {
+                var next = $"{current}/{parts[i]}";
+                if (!AssetDatabase.IsValidFolder(next))
+                    AssetDatabase.CreateFolder(current, parts[i]);
+
+                current = next;
+            }
+        }
 
 #if MVVM_LOCALIZATION_ADDRESSABLES
         private static void EnsureAddressable(string groupName, string assetPath, string address)
@@ -207,6 +312,18 @@ namespace MVVM.Localization.Editor
             entry.SetLabel(groupName, true);
         }
 #endif
+
+        private readonly struct ImportedAssetRecord
+        {
+            public ImportedAssetRecord(LocalizationImportSource source, LocalizationTableAsset asset)
+            {
+                Source = source;
+                Asset = asset;
+            }
+
+            public LocalizationImportSource Source { get; }
+            public LocalizationTableAsset Asset { get; }
+        }
     }
 }
 #endif

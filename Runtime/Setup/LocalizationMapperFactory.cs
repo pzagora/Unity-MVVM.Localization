@@ -11,10 +11,11 @@ namespace MVVM.Localization
 
             foreach (var entry in setup.languageCodes)
             {
-                var code = entry.code.Trim();
+                var code = LocalizationKeyUtility.NormalizeLanguageCode(entry.code);
+                if (string.IsNullOrWhiteSpace(code))
+                    continue;
 
-                if (!string.IsNullOrWhiteSpace(code))
-                    map[code] = entry.language;
+                map[code] = entry.language;
             }
 
             return new LanguageMapper(map, setup.fallbackLanguage);

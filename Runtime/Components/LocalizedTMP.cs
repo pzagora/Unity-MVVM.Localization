@@ -19,8 +19,11 @@ namespace MVVM.Localization
 
         public void UpdateText()
         {
-            if (this)
-                text = string.Format(_localization.GetLocalized(Model.Key), Model.Args);
+            if (!this || _localization == null || Model == null)
+                return;
+
+            var template = _localization.GetLocalized(Model.Key);
+            text = LocalizationFormatter.Format(Model.Key, template, Model.Args);
         }
 
         protected override void OnEnable()

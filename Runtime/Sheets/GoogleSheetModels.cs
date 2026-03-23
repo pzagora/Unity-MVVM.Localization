@@ -6,9 +6,6 @@ namespace MVVM.Localization
     [Serializable]
     public sealed class GoogleSheetManifest
     {
-        public string spreadsheetId;
-        public string spreadsheetName;
-        public string exportedAtUtc;
         public List<GoogleSheetManifestTab> tabs = new();
     }
 
@@ -16,7 +13,7 @@ namespace MVVM.Localization
     public sealed class GoogleSheetManifestTab
     {
         public string title;
-        public int gid;
+        public string tableId;
         public string checksum;
         public List<string> headers = new();
         public List<GoogleSheetManifestRow> rows = new();

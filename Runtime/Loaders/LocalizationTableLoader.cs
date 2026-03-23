@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Commons.Extensions;
 using UnityEngine;
 
 #if MVVM_LOCALIZATION_ADDRESSABLES
@@ -25,20 +26,23 @@ namespace MVVM.Localization
             if (shouldUseLocal)
             {
                 MergeLocal(setup, output);
+                progress?.Report(NumericExtensions.One);
                 return output.Values.ToList();
             }
 
 #if MVVM_LOCALIZATION_ADDRESSABLES
-            var loadedAnyAddressables = await TryMergeAddressables(setup, output);
+            var loadedAnyAddressables = await TryMergeAddressables(setup, output, progress, ct);
             if (loadedAnyAddressables)
             {
                 if (setup.UseLocalAsRuntimeFallback)
                     MergeLocalWithoutOverwriting(setup, output);
 
+                progress?.Report(NumericExtensions.One);
                 return output.Values.ToList();
             }
 #endif
             MergeLocal(setup, output);
+            progress?.Report(NumericExtensions.One);
             return output.Values.ToList();
         }
 
@@ -61,27 +65,54 @@ namespace MVVM.Localization
         }
 
 #if MVVM_LOCALIZATION_ADDRESSABLES
-        private static async Task<bool> TryMergeAddressables(LocalizationSetup setup, IDictionary<string, Translation> output)
+        private static async Task<bool> TryMergeAddressables(
+            LocalizationSetup setup,
+            IDictionary<string, Translation> output,
+            IProgress<float> progress,
+            CancellationToken ct)
         {
             if (setup?.Catalog == null || setup.Catalog.AddressableKeys == null || setup.Catalog.AddressableKeys.Count == 0)
                 return false;
 
-            var loadedAny = false;
-            foreach (var key in setup.Catalog.AddressableKeys)
-            {
-                var handle = Addressables.LoadAssetAsync<LocalizationTableAsset>(key);
-                await handle.Task;
+            var handles = new List<AsyncOperationHandle<LocalizationTableAsset>>();
 
-                if (handle.Status == AsyncOperationStatus.Succeeded && handle.Result != null)
+            try
+            {
+                foreach (var key in setup.Catalog.AddressableKeys)
                 {
-                    loadedAny = true;
-                    MergeTable(handle.Result, output, overwrite: true);
+                    ct.ThrowIfCancellationRequested();
+                    handles.Add(Addressables.LoadAssetAsync<LocalizationTableAsset>(key));
                 }
 
-                Addressables.Release(handle);
-            }
+                var tasks = handles.Select(x => x.Task).ToArray();
+                for (var i = NumericExtensions.Zero; i < tasks.Length; i++)
+                {
+                    await tasks[i];
+                    progress?.Report((i + 1f) / tasks.Length);
+                }
 
-            return loadedAny;
+                var loadedAny = false;
+                foreach (var handle in handles)
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    if (handle.Status == AsyncOperationStatus.Succeeded && handle.Result != null)
+                    {
+                        loadedAny = true;
+                        MergeTable(handle.Result, output, overwrite: true);
+                    }
+                }
+
+                return loadedAny;
+            }
+            finally
+            {
+                foreach (var handle in handles)
+                {
+                    if (handle.IsValid())
+                        Addressables.Release(handle);
+                }
+            }
         }
 #endif
 
@@ -90,15 +121,18 @@ namespace MVVM.Localization
             if (table == null)
                 return;
 
-            foreach (var translation in table.EnumerateTranslations())
+            foreach (var translation in table.EnumerateEntries())
             {
-                if (translation == null || string.IsNullOrWhiteSpace(translation.Id))
+                var id = LocalizationKeyUtility.NormalizeKey(translation?.Id);
+                if (translation == null || string.IsNullOrWhiteSpace(id))
                     continue;
 
-                if (!overwrite && output.ContainsKey(translation.Id))
+                translation.Id = id;
+
+                if (!overwrite && output.ContainsKey(id))
                     continue;
 
-                output[translation.Id] = translation;
+                output[id] = translation;
             }
         }
     }

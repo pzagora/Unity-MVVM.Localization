@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace MVVM.Localization
 {
-    [CreateAssetMenu(menuName = "Scriptable Objects/Localization/Catalog")]
+    [CreateAssetMenu(menuName = "Scriptable Objects/MVVM/Localization/Catalog")]
     public sealed class LocalizationCatalogAsset : ScriptableObject
     {
         [SerializeField] private List<LocalizationTableAsset> localTables = new();

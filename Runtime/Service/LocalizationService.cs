@@ -42,8 +42,10 @@ namespace MVVM.Localization
         private const string LOG_REGISTERED_TRANSLATIONS = "Registered {0} translation keys";
         private const string LOG_LANGUAGE_CHANGED = "Language changed: {0} -> {1}";
         private const string LOG_MISSING_TRANSLATION = "Missing translation in {0}: {1}";
+        private const string LOG_MISSING_KEY = "Missing translation key: {0}";
+        private const string LOG_FALLBACK_USED = "Fallback translation used: requested={0}, fallback={1}, key={2}";
         private const string LOG_UNKNOWN_LANGUAGE = "Unknown language code: {0} ({1} entries){2}";
-        private const string LOG_TEXTS_UPDATED = "Text components updated: {0} | Batch amount: {1})";
+        private const string LOG_TEXTS_UPDATED = "Text components updated: {0} | Batch amount: {1}";
 
         protected LocalizationService(LocalizationSetup setup, ILanguageMapper<TLanguage> mapper)
         {
@@ -61,10 +63,7 @@ namespace MVVM.Localization
             _translations.Clear();
             progress?.Report(PROGRESS_START);
 
-            var loadProgress = new Progress<float>(value =>
-            {
-                progress?.Report(value * PROGRESS_LOAD_WEIGHT);
-            });
+            var loadProgress = new Progress<float>(value => { progress?.Report(value * PROGRESS_LOAD_WEIGHT); });
 
             var loadedTranslations = await LocalizationTableLoader.LoadTranslations(_setup, loadProgress, ct);
             ct.ThrowIfCancellationRequested();
@@ -86,7 +85,11 @@ namespace MVVM.Localization
                 ct.ThrowIfCancellationRequested();
 
                 var translation = loadedTranslations[i];
-                _translations[translation.Id] = BuildTranslationMap(translation, unknownLanguages);
+                var normalizedId = LocalizationKeyUtility.NormalizeKey(translation?.Id);
+                if (string.IsNullOrWhiteSpace(normalizedId))
+                    continue;
+
+                _translations[normalizedId] = BuildTranslationMap(translation, unknownLanguages);
 
                 var itemProgress = (i + 1f) / translationCount;
                 progress?.Report(PROGRESS_LOAD_WEIGHT + itemProgress * PROGRESS_MAP_WEIGHT);
@@ -127,7 +130,7 @@ namespace MVVM.Localization
         }
 
         public bool HasLocalized(string key)
-            => !string.IsNullOrWhiteSpace(key) && _translations.ContainsKey(key.ToLowerInvariant());
+            => !string.IsNullOrWhiteSpace(key) && _translations.ContainsKey(LocalizationKeyUtility.NormalizeKey(key));
 
         public string GetLocalized(string key)
             => GetLocalized(key, CurrentLanguage);
@@ -137,16 +140,27 @@ namespace MVVM.Localization
             if (string.IsNullOrWhiteSpace(key))
                 return string.Empty;
 
-            key = key.ToLowerInvariant();
+            key = LocalizationKeyUtility.NormalizeKey(key);
 
-            var hasMap = _translations.TryGetValue(key, out var langMap);
-            if (hasMap && langMap.TryGetValue(language, out var text))
+            if (!_translations.TryGetValue(key, out var langMap) || langMap == null || langMap.Count == 0)
             {
+                Report.Warning<LocalizationService>(string.Format(LOG_MISSING_KEY, key));
+                return key;
+            }
+
+            if (TryGetNonEmpty(langMap, language, out var text))
                 return text;
+
+            if (TryGetFallbackLanguage(langMap, language, key, out text))
+                return text;
+
+            foreach (var pair in langMap)
+            {
+                if (!string.IsNullOrWhiteSpace(pair.Value))
+                    return pair.Value;
             }
 
             Report.Warning<LocalizationService>(string.Format(LOG_MISSING_TRANSLATION, language, key));
-
             return key;
         }
 
@@ -155,19 +169,63 @@ namespace MVVM.Localization
             Dictionary<string, UnknownLanguageInfo> unknownLanguages)
         {
             var map = new Dictionary<TLanguage, string>();
+            if (translation?.values == null)
+                return map;
 
             foreach (var translationValue in translation.values)
             {
-                if (_mapper.TryGetLanguage(translationValue.lang, out var lang))
+                var languageCode = LocalizationKeyUtility.NormalizeLanguageCode(translationValue.lang);
+                if (_mapper.TryGetLanguage(languageCode, out var lang))
                 {
-                    map[lang] = translationValue.text;
+                    map[lang] = translationValue.text ?? string.Empty;
                     continue;
                 }
 
-                RegisterUnknownLanguage(translation.Id, translationValue.lang, unknownLanguages);
+                RegisterUnknownLanguage(translation.Id, languageCode, unknownLanguages);
             }
 
             return map;
+        }
+
+        private bool TryGetFallbackLanguage(
+            Dictionary<TLanguage, string> langMap,
+            TLanguage requestedLanguage,
+            string key,
+            out string text)
+        {
+            text = null;
+
+            if (!TryGetConfiguredFallbackLanguage(out var fallbackLanguage))
+                return false;
+
+            if (Equals(fallbackLanguage, requestedLanguage))
+                return false;
+
+            if (!TryGetNonEmpty(langMap, fallbackLanguage, out text))
+                return false;
+
+            Report.Event<LocalizationService>(string.Format(LOG_FALLBACK_USED, requestedLanguage, fallbackLanguage, key));
+            return true;
+        }
+
+        private bool TryGetConfiguredFallbackLanguage(out TLanguage fallbackLanguage)
+        {
+            fallbackLanguage = default;
+
+            if (typeof(TLanguage) != typeof(Language))
+                return false;
+
+            fallbackLanguage = (TLanguage)(object)_setup.fallbackLanguage;
+            return true;
+        }
+
+        private static bool TryGetNonEmpty(Dictionary<TLanguage, string> map, TLanguage language, out string text)
+        {
+            if (map.TryGetValue(language, out text) && !string.IsNullOrWhiteSpace(text))
+                return true;
+
+            text = null;
+            return false;
         }
 
         private static void RegisterUnknownLanguage(
@@ -175,6 +233,8 @@ namespace MVVM.Localization
             string languageCode,
             Dictionary<string, UnknownLanguageInfo> unknownLanguages)
         {
+            languageCode ??= string.Empty;
+
             if (!unknownLanguages.TryGetValue(languageCode, out var info))
             {
                 info = new UnknownLanguageInfo();
@@ -194,20 +254,15 @@ namespace MVVM.Localization
             }
         }
 
-        private static string BuildUnknownLanguageKeysLog(HashSet<string> translationKeys)
+        private static string BuildUnknownLanguageKeysLog(IEnumerable<string> translationKeys)
         {
-            if (translationKeys.Count == NumericExtensions.Zero)
+            var keys = translationKeys?.Where(x => !string.IsNullOrWhiteSpace(x)).Take(5).ToArray();
+            if (keys == null || keys.Length == 0)
                 return string.Empty;
 
             var builder = new StringBuilder();
-            builder.AppendLine();
-
-            foreach (var key in translationKeys)
-            {
-                builder.Append("- ");
-                builder.AppendLine(key);
-            }
-
+            builder.Append(" | Keys: ");
+            builder.Append(string.Join(", ", keys));
             return builder.ToString();
         }
 
@@ -218,16 +273,13 @@ namespace MVVM.Localization
             if (_registeredTexts.Count == 0)
                 return;
 
-            var snapshot = _registeredTexts.ToArray();
+            var snapshot = _registeredTexts.Where(x => x != null).ToArray();
             var count = 0;
             var batchCount = 1;
 
             foreach (var text in snapshot)
             {
                 ct.ThrowIfCancellationRequested();
-
-                if (text == null)
-                    continue;
 
                 text.UpdateText();
                 count++;

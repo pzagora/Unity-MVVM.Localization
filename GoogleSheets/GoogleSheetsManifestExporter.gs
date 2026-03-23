@@ -26,8 +26,9 @@ function buildTab(sheet) {
   }
 
   const title = sheet.getName().trim();
+  const tableId = getTableId(sheet, title);
   const headers = data[0].map(x => String(x || '').trim());
-  const languages = headers.slice(1);
+  const languages = headers.slice(1).map(x => String(x || '').trim().toLowerCase());
 
   const headerSet = new Set(languages);
   if (headerSet.size !== languages.length) {
@@ -37,7 +38,7 @@ function buildTab(sheet) {
   const rows = [];
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
-    const rawKey = String(row[0] || '').trim().toLowerCase();
+    const rawKey = normalizeKey(row[0]);
     if (!rawKey) continue;
 
     rows.push({
@@ -50,6 +51,7 @@ function buildTab(sheet) {
 
   const payloadForChecksum = JSON.stringify({
     title,
+    tableId,
     gid: sheet.getSheetId(),
     headers,
     rows
@@ -57,11 +59,27 @@ function buildTab(sheet) {
 
   return {
     title,
+    tableId,
     gid: sheet.getSheetId(),
     checksum: sha256Hex(payloadForChecksum),
     headers,
     rows
   };
+}
+
+function getTableId(sheet, fallbackTitle) {
+  const note = String(sheet.getRange('A1').getNote() || '').trim();
+  const match = note.match(/tableId\s*:\s*([^\n\r]+)/i);
+  const value = match ? match[1] : fallbackTitle;
+  return normalizeKey(value);
+}
+
+function normalizeKey(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\\/g, '.')
+    .replace(/\//g, '.')
+    .toLowerCase();
 }
 
 function sha256Hex(input) {
