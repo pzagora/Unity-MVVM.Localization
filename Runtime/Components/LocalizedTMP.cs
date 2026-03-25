@@ -45,9 +45,6 @@ namespace MVVM.Localization
 
             if (_localization == null) 
                 return;
-
-            if (Model == null)
-                return;
             
             _localization.Register(this);
             UpdateText();

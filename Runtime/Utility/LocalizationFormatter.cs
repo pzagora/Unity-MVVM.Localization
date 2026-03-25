@@ -1,7 +1,7 @@
+using static Commons.Extensions.NumericExtensions;
 using System;
 using System.Globalization;
 using System.Linq;
-using Commons.Extensions;
 using UnityEngine;
 
 namespace MVVM.Localization
@@ -18,10 +18,10 @@ namespace MVVM.Localization
 
             args ??= Array.Empty<object>();
 
-            if (args.Length == NumericExtensions.Zero)
+            if (args.Length == Zero)
             {
                 if (LooksLikeCompositeFormat(template))
-                    Report.Warning<LocalizationFormatter>(string.Format(LOG_MISSING_ARGS, key ?? string.Empty, template, template));
+                    Report.Warning<LocalizationFormatter>(string.Format(LOG_MISSING_ARGS, key ?? string.Empty, template));
 
                 return template;
             }
@@ -56,18 +56,18 @@ namespace MVVM.Localization
 
         private static bool LooksLikeCompositeFormat(string template)
         {
-            for (var i = NumericExtensions.Zero; i < template.Length; i++)
+            for (var i = Zero; i < template.Length; i++)
             {
-                if (template[i] != '{' || i + 1 >= template.Length)
+                if (template[i] != '{' || i + One >= template.Length)
                     continue;
 
-                if (template[i + 1] == '{')
+                if (template[i + One] == '{')
                 {
                     i++;
                     continue;
                 }
 
-                return char.IsDigit(template[i + 1]);
+                return char.IsDigit(template[i + One]);
             }
 
             return false;
@@ -75,7 +75,7 @@ namespace MVVM.Localization
 
         private static string BuildArgsPreview(object[] args)
         {
-            if (args == null || args.Length == NumericExtensions.Zero)
+            if (args == null || args.Length == Zero)
                 return "[]";
 
             return "[" + string.Join(", ", args.Select(arg => arg?.ToString() ?? "null")) + "]";
