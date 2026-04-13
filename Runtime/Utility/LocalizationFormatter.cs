@@ -1,4 +1,4 @@
-using static Commons.Extensions.NumericExtensions;
+using static Commons.NumericExtensions;
 using System;
 using System.Globalization;
 using System.Linq;

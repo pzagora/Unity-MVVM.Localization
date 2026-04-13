@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Commons.Extensions;
+using Commons;
 using UnityEngine;
 
 #if MVVM_LOCALIZATION_ADDRESSABLES

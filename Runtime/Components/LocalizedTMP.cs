@@ -1,5 +1,4 @@
 using Commons;
-using Commons.Injection;
 using UnityEngine;
 
 namespace MVVM.Localization

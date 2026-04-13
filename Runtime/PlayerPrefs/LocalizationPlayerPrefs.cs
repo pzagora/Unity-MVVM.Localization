@@ -1,4 +1,4 @@
-using Commons.PlayerPrefs;
+using Commons;
 
 namespace MVVM.Localization
 {

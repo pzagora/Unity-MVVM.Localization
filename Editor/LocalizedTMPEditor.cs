@@ -1,11 +1,12 @@
 #if UNITY_EDITOR
+using Commons.Editor;
 using UnityEditor;
 using UnityEngine;
 
 namespace MVVM.Localization.Editor
 {
     [CustomEditor(typeof(LocalizedTMP))]
-    internal class LocalizedTMPEditor : Commons.Editor.Texts.StyleLinkedTMPEditor
+    internal class LocalizedTMPEditor : StyleLinkedTMPEditor
     {
         public override void OnInspectorGUI()
         {

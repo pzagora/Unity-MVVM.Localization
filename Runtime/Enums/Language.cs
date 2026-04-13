@@ -1,4 +1,4 @@
-using Commons.Attributes;
+using Commons;
 
 namespace MVVM.Localization
 {

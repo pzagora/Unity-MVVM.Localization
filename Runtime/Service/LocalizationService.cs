@@ -4,8 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Commons.Extensions;
-using Commons.Injection;
+using Commons;
 using UnityEngine;
 
 namespace MVVM.Localization
